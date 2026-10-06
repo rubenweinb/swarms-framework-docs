@@ -1,0 +1,117 @@
+---
+title: 'Decision model usage and costs'
+description: 'Read DecisionModel token totals, estimate one request or a batch, and understand price lookup limits'
+icon: 'coins'
+---
+
+Use `DecisionModel.usage` to track the token counts reported by a decision provider. Use `calculate_cost()` to turn those counts into a USD estimate. These interfaces belong to [`DecisionModel`](/api/decision-model), the HTTP client for typed questions, rather than the LLM-backed [`Agent`](/api/agent).
+
+<Note>
+This guide follows the current source. If your installed version does not expose these interfaces, install from the framework repository:
+
+```bash
+pip install git+https://github.com/kyegomez/swarms.git
+```
+</Note>
+
+## Estimate a batch before calling the API
+
+You can estimate a batch using hypothetical token counts without running the model. The following example uses the bundled price for TypeSafe's `jev-latest`. The placeholder key is only for constructing the client; it is not a usable API credential.
+
+```python
+from swarms import DecisionModel
+
+model = DecisionModel(model_name="jev-latest", api_key="unused-offline-example")
+try:
+    estimated_tokens_per_item = 1_000
+    item_count = 100
+    estimate = model.calculate_cost({
+        "input_tokens": estimated_tokens_per_item * item_count,
+        "output_tokens": 0,
+    })
+    print(model.get_price())
+    print(f"Estimated batch cost: ${estimate['total_cost']:.6f}")
+    print(model.usage)  # Still zero: this example makes no decision requests.
+finally:
+    model.close()
+```
+
+The token count is an assumption you supply, not a tokenizer result. Estimate it from representative provider responses before planning a larger job. If you ask several questions about one state, put them in one `run()` request rather than repeating the state in calls to the single-question helpers.
+
+This offline example uses TypeSafe because its prices come from the bundled provider table. A Cloudflare price lookup can make a network request when Cloudflare credentials are configured.
+
+## Price one successful response
+
+For real requests, set `TYPESAFE_API_KEY` in your environment. Construct the client without the placeholder key, run your questions, and pass that response's usage to `calculate_cost()`.
+
+```python
+from swarms import DecisionModel
+
+model = DecisionModel()
+try:
+    result = model.run(
+        state="The production checkout has been failing for an hour.",
+        questions={
+            "urgent": {
+                "type": "noul",
+                "instructions": "This request needs immediate attention.",
+            },
+        },
+    )
+    request_cost = model.calculate_cost(result.get("usage") or {})
+    print(f"This response: ${request_cost['total_cost']:.6f}")
+    print(model.usage)
+finally:
+    model.close()
+```
+
+This example calls a provider and can incur charges. Its output depends on that provider; no response output is asserted here. An absent usage field gives a zero estimate, which means the counts were not reported. It does not prove the request was free.
+
+## Read cumulative usage
+
+`model.usage` starts with `input_tokens` and `output_tokens` at zero. The client adds counts from successfully parsed responses returned by `run()`, `arun()` and the single-question helpers. The property returns a copy, so editing the returned dictionary does not change the client's totals.
+
+Calls on the same instance contribute to the same totals, including concurrent `arun()` calls. Counts from another instance or process are not included. Calling `close()` closes the pooled HTTP connection but does not reset usage or the cached price.
+
+Call `model.calculate_cost()` without arguments to price the cumulative counts. Pass an explicit usage dictionary to price one response or an estimate instead. Supplying counts does not add them to `model.usage`.
+
+<Warning>
+The cumulative counter excludes failed requests and responses rejected during parsing. A provider can still charge for those requests or for retries. Check the provider's billing records to reconcile actual spending. These helpers do not enforce a spending limit.
+</Warning>
+
+## Understand the cost fields
+
+Both `get_price()` and `get_decision_model_prices()` express prices in USD **per million tokens**. `calculate_cost()` returns costs in USD:
+
+| Key | Meaning |
+| --- | --- |
+| `input_tokens` | Supplied or cumulative input count |
+| `output_tokens` | Supplied or cumulative output count |
+| `input_cost` | Input count multiplied by input price, divided by 1,000,000 |
+| `output_cost` | Output count multiplied by output price, divided by 1,000,000 |
+| `total_cost` | Input cost plus output cost |
+
+Missing or falsey count values are treated as zero. The client does not validate a supplied dictionary as a billing record. Use nonnegative numeric counts reported by your provider, or label your hypothetical counts as estimates.
+
+## Look up prices and handle unknown models
+
+`model.get_price()` returns `{"input": ..., "output": ...}` for that instance's model. The first successful lookup is cached on the instance. Later calls return a copy of the cached price, including after `close()`.
+
+The bundled table provides TypeSafe prices. Cloudflare can fetch live price properties when `CLOUDFLARE_AUTH_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` are available. Missing credentials, request failures or unusable price properties leave the bundled fallback entries in place. A fallback price can be older than the provider's current rate.
+
+```python
+from swarms import get_decision_model_prices
+
+prices = get_decision_model_prices()
+for name, price in prices.items():
+    print(name, price["input"], price["output"])
+```
+
+The global helper builds a new all-provider mapping each time. It does not refresh prices already cached by an existing `DecisionModel` instance. Create a new instance to perform a fresh instance lookup.
+
+A custom endpoint or gateway model name can run successfully while having no entry in the pricing table. For example, the gateway identifier `~typesafe/jev-latest` is distinct from `jev-latest` in that table. `get_price()` and `calculate_cost()` raise `ValueError` when no price is known. Do not treat that error as a zero cost; use the gateway's own billing data and documented rate.
+
+## Related
+
+- [DecisionModel reference](/api/decision-model): requests, providers and retries.
+- [Agent token usage](/agents/token-usage): the separate usage interface for LLM-backed agents.

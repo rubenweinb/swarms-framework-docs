@@ -50,7 +50,7 @@ Use an [`Agent`](/api/agent) when you need generated text, tool calls or multi-s
 ## Import
 
 ```python
-from swarms import DecisionModel, get_decision_models
+from swarms import DecisionModel, get_decision_models, get_decision_model_prices
 ```
 
 Both names are also exported from `swarms.structs`. The module is `swarms.structs.decision_model`.
@@ -472,6 +472,45 @@ print(get_decision_models())
 ```
 
 Results are not cached, so each call with credentials set makes fresh requests.
+
+## Usage and cost estimates
+
+`DecisionModel` also exposes token usage and price helpers. See [Decision model usage and costs](/agents/decision-model-costs) for examples and the limits of these estimates.
+
+### usage
+
+```python
+@property
+def usage() -> Dict[str, int]
+```
+
+Returns a copy of the cumulative `input_tokens` and `output_tokens` reported by successfully parsed responses on this instance. Counts begin at zero and are not reset by `close()`.
+
+### get_price
+
+```python
+def get_price() -> Dict[str, float]
+```
+
+Returns `input` and `output` prices in USD per million tokens. The first successful lookup is cached on the instance. Raises `ValueError` if no price is known for its model name.
+
+### calculate_cost
+
+```python
+def calculate_cost(usage: Optional[Dict[str, int]] = None) -> Dict[str, float]
+```
+
+Prices the supplied counts, or the instance's cumulative usage when omitted. Returns `input_tokens`, `output_tokens`, `input_cost`, `output_cost` and `total_cost`. Costs are in USD. Missing count keys become zero. Raises `ValueError` if no price is known. This method does not run a decision request or enforce a budget.
+
+### get_decision_model_prices
+
+```python
+from swarms import get_decision_model_prices
+
+prices = get_decision_model_prices()
+```
+
+Returns a mapping from model names to `input` and `output` prices in USD per million tokens. Each call combines bundled prices with available live provider prices. It does not update any existing instance's cached price.
 
 ## Retries
 

@@ -75,7 +75,8 @@
               "agents/agent-skills",
               "agents/structured-outputs",
               "agents/prompt-caching",
-              "agents/token-usage"
+              "agents/token-usage",
+              "agents/decision-model-costs"
             ]
           },
           {
